@@ -1,21 +1,23 @@
 import os
 import sys
 import zlib
+import pathlib
+
 
 class CommitNode:
     def __init__(self, commit_hash):
         self.commit_hash = commit_hash
-        self.parents = set()
-        self.children = set()
+        self.parents = []
+        self.children = []
 
 
 def find_git_directory():
     current_dir = os.getcwd()
-    print("\n",current_dir)
+    print("\n", current_dir)
 
     while True:
         if os.path.exists(os.path.join(current_dir, '.git')):
-            print("found .git in " + str(current_dir), file=sys.stderr)
+            # print("found .git in " + str(current_dir), file=sys.stderr)
             return current_dir
 
         parent_dir = os.path.dirname(current_dir)
@@ -28,7 +30,7 @@ def find_git_directory():
     sys.exit(1)
 
 
-def build_commit_graph(git_directory):
+def build_commit_graph(git_directory, branches):
     refs_directory = os.path.join(git_directory, '.git', 'refs', 'heads')
     objects_directory = os.path.join(git_directory, '.git', 'objects')
 
@@ -38,18 +40,12 @@ def build_commit_graph(git_directory):
     # Retrieve branch names and their corresponding commit hashes
     branch_commits = {}
     # Set branch_commits to dictionary of branches and their commits
-    for root, _, files in os.walk(refs_directory):
-        for file in files:
-            branch_path = os.path.join(root, file)
-            with open(branch_path, 'r') as f:
-                branch_name = file
-                commit_hash = f.read().strip()
-                branch_commits[branch_name] = commit_hash
+
 
     # Traverse each branch to build commit graph
-    for branch_name, branch_head in branch_commits.items():
+    for branch_id, branch_name in branches.items():
         visited = set()
-        stack = [branch_head]
+        stack = [branch_id]
 
         while stack:
             commit_hash = stack.pop()
@@ -65,15 +61,18 @@ def build_commit_graph(git_directory):
             current_node = commit_graph[commit_hash]
 
             # Retrieve commit object and its parent hashes
-            object_path = os.path.join(objects_directory, commit_hash[:2], commit_hash[2:])
+            object_path = os.path.join(
+                objects_directory, commit_hash[:2], commit_hash[2:])
             with open(object_path, 'rb') as f:
                 compressed_data = f.read()
 
-            decompressed_data = zlib.decompress(compressed_data).decode('utf-8')
+            decompressed_data = zlib.decompress(
+                compressed_data).decode('utf-8')
             lines = decompressed_data.splitlines()
 
             # Extract parent hashes from commit object
-            parent_hashes = [line.split(' ')[1] for line in lines if line.startswith('parent')]
+            parent_hashes = [line.split(' ')[1]
+                             for line in lines if line.startswith('parent')]
 
             # Update parent-child relationships in the commit graph
             for parent_hash in parent_hashes:
@@ -81,8 +80,8 @@ def build_commit_graph(git_directory):
                     commit_graph[parent_hash] = CommitNode(parent_hash)
                 parent_node = commit_graph[parent_hash]
 
-                parent_node.children.add(commit_hash)
-                current_node.parents.add(parent_hash)
+                parent_node.children.append(commit_hash)
+                current_node.parents.append(parent_hash)
 
                 stack.append(parent_hash)
             # Check if current commit is a root commit
@@ -93,39 +92,46 @@ def build_commit_graph(git_directory):
 
 
 def get_local_branches(git_directory):
-    refs_directory = os.path.join(git_directory, '.git', 'refs', 'heads')
+    refs_directory = pathlib.Path(git_directory) / '.git' / 'refs' / 'heads'
 
     branches = {}
-    for root, _, files in os.walk(refs_directory):
-        for file in files:
-            branch_path = os.path.join(root, file)
+
+    for branch_path in refs_directory.rglob('*'):
+        if branch_path.is_file() and branch_path.name != ".DS_Store":
+            relative_path = branch_path.relative_to(refs_directory)
             with open(branch_path, 'r') as f:
                 branch_id = f.read().strip()
-                branches.setdefault(branch_id, []).append(file)
+                branches.setdefault(branch_id, []).append(str(relative_path))
+
     return branches
 
+
 def get_topological_order(commit_graph, root_commits):
-    visited = set()
+    visited = []
     order = []
-
-    def dfs(commit_hash):
-        visited.add(commit_hash)
-
-        # Traverse children first
-        for child_hash in commit_graph[commit_hash].children:
-            if child_hash not in visited:
-                dfs(child_hash)
-
-        # Append the current commit to the order
-        order.append(commit_hash)
+    stack = []
 
     # Perform depth-first search starting from each root commit
     for root_commit in root_commits:
-        if root_commit not in visited:
-            dfs(root_commit)
+        stack.append(root_commit)
 
+        while stack:
+            commit_hash = stack[-1]
 
-    return order
+            # Traverse children first
+            for child_hash in commit_graph[commit_hash].children:
+                if child_hash not in visited:
+                    stack.append(child_hash)
+                    break
+            else:
+                # All children have been visited
+                commit_hash = stack.pop()
+                visited.append(commit_hash)
+                order.append(commit_hash)
+
+    no_dupes = []
+    [no_dupes.append(x) for x in order if x not in no_dupes]
+    return no_dupes
 
 
 def print_commit_order(commit_order, commit_graph, branch_names):
@@ -141,7 +147,6 @@ def print_commit_order(commit_order, commit_graph, branch_names):
             print(" ".join(commit_graph[prev].parents) + " =", end="\n\n")
             sticky_start = "= " + " ".join(commit_node.children)
             print(sticky_start)
-            
 
         # Print the commit hash
         print(commit_hash, end=" ")
@@ -157,20 +162,19 @@ def print_commit_order(commit_order, commit_graph, branch_names):
         prev = commit_hash
 
 
+def topo_order_commits():
+    git_directory = find_git_directory()
+    branches = get_local_branches(git_directory)
+    graph, roots = build_commit_graph(git_directory, branches)
+    topological_order = get_topological_order(graph, roots)
+    print_commit_order(topological_order, graph, branches)
 
 
 if __name__ == "__main__":
     # CHANGE OF DIRECTORY FOR TESTING PURPOSES
-    target_dir = "/Users/ryanmacpro/Documents/School/CS35L/Assignment6/RocketProjectatUCLA"
+    # target_dir = "/Users/ryanmacpro/Documents/School/CS35L/Assignment6/RocketProjectatUCLA"
+    target_dir = "/Users/ryanmacpro/Documents/School/CS35L/Assignment6/topo-ordered-commits-test-suite/tests/repo_fixture/example-repo-8/"
+
     os.chdir(target_dir)
     ########
-    git_directory = find_git_directory()
-    branch_names = get_local_branches(git_directory)
-    graph, roots = build_commit_graph(git_directory)
-    # print("Local Branches:", branch_names)
-    # print("Commit Graph:", graph)
-    # print("Roots:", roots)
-
-    topological_order = get_topological_order(graph, roots)
-    # print("Topological Order:", topological_order)
-    print_commit_order(topological_order, graph, branch_names)
+    topo_order_commits()
