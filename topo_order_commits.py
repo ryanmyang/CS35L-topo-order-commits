@@ -13,7 +13,7 @@ class CommitNode:
 
 def find_git_directory():
     current_dir = os.getcwd()
-    print("\n", current_dir)
+    #print("\n", current_dir)
 
     while True:
         if os.path.exists(os.path.join(current_dir, '.git')):
@@ -31,19 +31,13 @@ def find_git_directory():
 
 
 def build_commit_graph(git_directory, branches):
-    refs_directory = os.path.join(git_directory, '.git', 'refs', 'heads')
     objects_directory = os.path.join(git_directory, '.git', 'objects')
 
     commit_graph = {}
     root_commits = set()
 
-    # Retrieve branch names and their corresponding commit hashes
-    branch_commits = {}
-    # Set branch_commits to dictionary of branches and their commits
-
-
     # Traverse each branch to build commit graph
-    for branch_id, branch_name in branches.items():
+    for branch_id, _ in branches.items():
         visited = set()
         stack = [branch_id]
 
@@ -80,8 +74,10 @@ def build_commit_graph(git_directory, branches):
                     commit_graph[parent_hash] = CommitNode(parent_hash)
                 parent_node = commit_graph[parent_hash]
 
-                parent_node.children.append(commit_hash)
-                current_node.parents.append(parent_hash)
+                if (commit_hash not in parent_node.children):
+                    parent_node.children.append(commit_hash)
+                if(parent_hash not in current_node.parents):
+                    current_node.parents.append(parent_hash)
 
                 stack.append(parent_hash)
             # Check if current commit is a root commit
@@ -144,8 +140,10 @@ def print_commit_order(commit_order, commit_graph, branch_names):
         # "If the next commit to be printed is not the parent of the current commit, insert a "sticky end""
         # The “sticky end” will contain the commit hashes of the parents of the current commit
         if prev and commit_hash not in commit_graph[prev].parents:
-            print(" ".join(commit_graph[prev].parents) + " =", end="\n\n")
-            sticky_start = "= " + " ".join(commit_node.children)
+            commit_graph[prev].parents.sort()
+            print(" ".join(commit_graph[prev].parents) + "=", end="\n\n")
+            commit_node.children.sort()
+            sticky_start = "=" + " ".join(commit_node.children)
             print(sticky_start)
 
         # Print the commit hash
